@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Tab Manager</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            width: 350px;
+            padding: 15px 20px;
+            background-color: #f7f7f7;
+            color: #333;
+        }
+        h1 {
+            font-size: 18px;
+            color: #333;
+            margin-top: 0;
+            text-align: center;
+        }
+        h2 {
+            font-size: 16px;
+            color: #444;
+            margin-top: 20px;
+            border-top: 1px solid #ccc;
+            padding-top: 10px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            font-size: 14px;
+            color: #555;
+        }
+        input[type="number"], textarea, select {
+            width: 100%;
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            box-sizing: border-box;
+            font-size: 14px;
+        }
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            background-color: #007bff;
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #save-status {
+            text-align: center;
+            margin-top: 10px;
+            color: #2e7d32;
+            font-weight: bold;
+            height: 18px;
+        }
+        #historyList li {
+            border-bottom: 1px solid #ddd;
+            padding: 6px 0;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap; /* Allow content to wrap on smaller screens */
+        }
+        #historyList li:last-child {
+            border-bottom: none;
+        }
+        .reopen-btn {
+            margin-top: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            width: auto; /* Override full width for this button */
+            margin-left: auto; /* Push button to the right */
+        }
+        #historyList li div {
+            flex-basis: 100%; /* Make title/url take full width by default */
+        }
+        #historyList li div:first-child {
+            margin-bottom: 4px;
+        }
+
+        /* NEW: Styles for statistics section */
+        .stats-group {
+            margin-bottom: 15px;
+            padding: 10px 0;
+            border-top: 1px solid #eee;
+            margin-top: 20px;
+            text-align: center;
+        }
+        .stats-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: #444;
+            background-color: #e9e9e9;
+            padding: 8px 12px;
+            border-radius: 4px;
+        }
+        .stats-label {
+            font-weight: bold;
+            color: #333;
+        }
+        .stats-value {
+            color: #007bff;
+            font-weight: bold;
+        }
+        .clear-stats-btn {
+            margin-top: 10px;
+            background-color: #dc3545; /* Red color for clear button */
+        }
+        .clear-stats-btn:hover {
+            background-color: #c82333;
+        }
+    </style>
+</head>
+<body>
+    <h1>Quidle</h1>
+
+    <div class="form-group">
+        <label for="tabLimit">Close tabs when count exceeds:</label>
+        <input type="number" id="tabLimit" min="1">
+    </div>
+
+    <div class="form-group">
+        <label for="inactivityTimer">Close tabs inactive for (minutes):</label>
+        <input type="number" id="inactivityTimer" min="1">
+    </div>
+
+    <div class="form-group">
+        <label for="whitelist">Whitelist (one domain per line):</label>
+        <textarea id="whitelist" placeholder="e.g., youtube.com&#10;docs.google.com"></textarea>
+    </div>
+
+    <div class="form-group">
+        <label for="actionType">Action on inactive tabs:</label>
+        <select id="actionType">
+            <option value="suspend">Suspend</option>
+            <option value="close">Close</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="extensionEnabled">
+            <input type="checkbox" id="extensionEnabled">
+            Enable Smart Tab Manager
+        </label>
+    </div>
+
+    <button id="saveButton">Save Settings</button>
+    <div id="save-status"></div>
+
+    <!-- NEW: Statistics Section -->
+    <h2>Saved Tabs Statistics</h2>
+    <div class="stats-group">
+        <div class="stats-item">
+            <span class="stats-label">Tabs Suspended:</span>
+            <span id="totalDiscardedCount" class="stats-value">0</span>
+        </div>
+        <div class="stats-item">
+            <span class="stats-label">Tabs Closed:</span>
+            <span id="totalClosedCount" class="stats-value">0</span>
+        </div>
+        <button id="clearStatsButton" class="clear-stats-btn">Clear Statistics</button>
+    </div>
+
+
+    <h2>Recently Suspended/Closed Tabs</h2>
+    <ul id="historyList" style="list-style: none; padding: 0;"></ul>
+    <button id="clearHistoryButton" style="margin-top: 10px;">Clear History</button>
+
+    <script src="popup.js"></script>
+</body>
+</html>
