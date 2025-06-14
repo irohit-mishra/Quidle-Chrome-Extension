@@ -10,14 +10,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const clearHistoryButton = document.getElementById('clearHistoryButton');
     const historyList = document.getElementById('historyList');
 
-    // NEW: Get references to statistics display elements and clear button
+    // Get references to statistics display elements and clear button
     const totalDiscardedCountSpan = document.getElementById('totalDiscardedCount');
     const totalClosedCountSpan = document.getElementById('totalClosedCount');
     const clearStatsButton = document.getElementById('clearStatsButton');
 
+    // Get reference to the current tab count display element
+    const currentTabCountSpan = document.getElementById('currentTabCount');
 
     // Load saved settings from storage and display them in the popup.
-    // Using async/await for consistency and cleaner error handling.
     const loadSettings = async () => {
         try {
             const result = await chrome.storage.local.get(['tabLimit', 'inactivityTimer', 'whitelist', 'extensionEnabled', 'actionType']);
@@ -35,7 +36,6 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Save the new settings to storage.
-    // Using async/await for consistency and cleaner error handling.
     const saveSettings = async () => {
         const tabLimit = parseInt(tabLimitInput.value, 10);
         const inactivityTimer = parseInt(inactivityTimerInput.value, 10);
@@ -64,7 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Load and render recently handled tab history.
-    // Using async/await for consistency and cleaner error handling.
     const loadClosedTabsHistory = async () => {
         try {
             const result = await chrome.storage.local.get(['closedTabsHistory']);
@@ -78,18 +77,20 @@ document.addEventListener('DOMContentLoaded', () => {
             historyList.innerHTML = ''; // Clear existing list items before re-rendering
 
             history.forEach(tab => {
-                // IMPORTANT FIX: Add a defensive check for 'tab' object validity
                 if (!tab || typeof tab !== 'object' || (!tab.title && !tab.url)) {
                     console.warn("Skipping malformed history entry:", tab);
-                    return; // Skip this entry if it's not a valid object or missing crucial data
+                    return;
                 }
 
                 const listItem = document.createElement('li');
                 listItem.style.marginBottom = '10px';
 
-                // Use tab.title or tab.url, ensuring fallbacks
                 const title = tab.title || tab.url || 'Untitled Tab';
-                const url = tab.url || 'about:blank'; // Ensure url is not empty for href
+                const url = tab.url || 'about:blank';
+
+                // Pass the original tab ID if it exists and was a suspended tab
+                // This will be used to try and reactivate the original tab
+                const originalTabId = tab.id || null; // Capture the original tab ID
 
                 listItem.innerHTML = `
                     <div>
@@ -97,16 +98,51 @@ document.addEventListener('DOMContentLoaded', () => {
                         <strong style="font-size: 14px;">${title}</strong>
                     </div>
                     <div style="font-size: 12px; color: #555; word-break: break-all;"><a href="${url}" target="_blank" style="color: #007bff; text-decoration: none;">${url}</a></div>
-                    <button style="margin-top:4px;padding:4px 8px;font-size:12px;" class="reopen-btn" data-url="${url}">Reopen</button>
+                    <button style="margin-top:4px;padding:4px 8px;font-size:12px;" class="reopen-btn" data-url="${url}" data-tab-id="${originalTabId}">Reopen</button>
                 `;
                 historyList.appendChild(listItem);
             });
 
             // Attach event listeners for reopen buttons
             document.querySelectorAll('.reopen-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
+                btn.addEventListener('click', async () => {
                     const url = btn.getAttribute('data-url');
-                    chrome.tabs.create({ url });
+                    const originalTabId = parseInt(btn.getAttribute('data-tab-id'), 10); // Get the original tab ID
+
+                    let tabReopened = false;
+
+                    if (!isNaN(originalTabId)) { // If we have a valid original tab ID
+                        try {
+                            // Try to find the specific tab by its ID
+                            const tabs = await chrome.tabs.query({ id: originalTabId, discarded: true });
+                            if (tabs.length > 0) {
+                                // Found the discarded tab, activate and reload it
+                                await chrome.tabs.update(originalTabId, { active: true });
+                                // Optionally, reload the tab if its content wasn't fully restored
+                                // await chrome.tabs.reload(originalTabId); // Uncomment if just activating isn't enough
+                                console.log(`Reactivated and focused discarded tab ID: ${originalTabId}`);
+                                tabReopened = true;
+                            }
+                        } catch (error) {
+                            console.warn(`Could not find or reactivate tab ID ${originalTabId}. It might have been truly closed or an error occurred:`, error);
+                            // Fall through to creating a new tab if there's an error finding it
+                        }
+                    }
+
+                    if (!tabReopened) {
+                        // If the original discarded tab wasn't found or reactivated,
+                        // try to find any existing tab with the same URL (discarded or not)
+                        const existingTabs = await chrome.tabs.query({ url: url });
+                        if (existingTabs.length > 0) {
+                            // Activate the first found tab with the same URL
+                            await chrome.tabs.update(existingTabs[0].id, { active: true });
+                            console.log(`Activated existing tab with URL: ${url}`);
+                        } else {
+                            // If no existing tab with the URL is found, create a new one
+                            await chrome.tabs.create({ url: url });
+                            console.log(`Created new tab for URL: ${url}`);
+                        }
+                    }
                 });
             });
         } catch (error) {
@@ -117,7 +153,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // NEW: Function to load and display tab management statistics
+    // Function to load and display tab management statistics
     const loadStats = async () => {
         try {
             const result = await chrome.storage.local.get(['totalDiscardedCount', 'totalClosedCount']);
@@ -131,7 +167,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // NEW: Function to clear tab management statistics
+    // Function to clear tab management statistics
     const clearStats = async () => {
         try {
             await chrome.storage.local.set({ totalDiscardedCount: 0, totalClosedCount: 0 });
@@ -145,6 +181,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    // Function to get and display the current number of open tabs
+    const loadCurrentTabCount = async () => {
+        try {
+            const allTabs = await chrome.tabs.query({});
+            currentTabCountSpan.textContent = allTabs.length;
+        } catch (error) {
+            console.error("Error loading current tab count:", error);
+            if (chrome.runtime.lastError) {
+                console.error("chrome.runtime.lastError:", chrome.runtime.lastError.message);
+            }
+        }
+    };
 
     // --- Event Listeners ---
     saveButton.addEventListener('click', saveSettings);
@@ -160,12 +208,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     });
-    // NEW: Add event listener for the clear stats button
+    // Add event listener for the clear stats button
     clearStatsButton.addEventListener('click', clearStats);
-
 
     // --- Initial Load ---
     loadSettings();
     loadClosedTabsHistory();
-    loadStats(); // NEW: Load statistics on popup open
+    loadStats();
+    loadCurrentTabCount(); // Load current tab count on popup open
 });
