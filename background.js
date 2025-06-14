@@ -80,7 +80,7 @@ async function removeTabData(tabId) {
  * if the tab count exceeds the limit.
  */
 async function checkAndCloseTabs() {
-    console.log('Smart Tab Manager: Checking tabs...');
+    console.log('Quidle: Checking tabs...');
 
     // Retrieve all user settings from local storage.
     const settings = await chrome.storage.local.get([
@@ -106,7 +106,7 @@ async function checkAndCloseTabs() {
 
     // If the extension is disabled, log a message and exit.
     if (!extensionEnabled) {
-        console.log('Smart Tab Manager is disabled.');
+        console.log('Quidle is disabled.');
         return;
     }
 
@@ -173,7 +173,7 @@ async function checkAndCloseTabs() {
 
     // If a tab to close/suspend is identified.
     if (tabToClose) {
-        console.log(`Smart Tab Manager: Handling tab: ${tabToClose.title || tabToClose.url} (ID: ${tabToClose.id})`);
+        console.log(`Quidle: Handling tab: ${tabToClose.title || tabToClose.url} (ID: ${tabToClose.id})`);
 
         // Prepare data for history.
         const tabData = {
@@ -201,6 +201,20 @@ async function checkAndCloseTabs() {
                 console.log(`Closed tab: "${tabToClose.title || tabToClose.url}"`);
             } else { // 'suspend' (discard)
                 await chrome.tabs.discard(tabToClose.id);
+                // NEW: Store the tab ID along with other data for history
+                const suspendedTabData = {
+                    id: tabToClose.id, // CRITICAL ADDITION: Store the tab's ID
+                    url: tabToClose.url || 'about:blank',
+                    title: tabToClose.title || 'Untitled',
+                    favIconUrl: tabToClose.favIconUrl || '',
+                    closedAt: Date.now()
+                };
+                // Retrieve existing history, add the new entry, and save
+                const { closedTabsHistory: currentHistory = [] } = await chrome.storage.local.get('closedTabsHistory');
+                currentHistory.unshift(suspendedTabData);
+                await chrome.storage.local.set({ closedTabsHistory: currentHistory.slice(0, 10) });
+
+
                 // NEW: Increment totalDiscardedCount
                 await chrome.storage.local.set({ totalDiscardedCount: totalDiscardedCount + 1 });
                 console.log(`Suspended tab: "${tabToClose.title || tabToClose.url}"`);
@@ -219,7 +233,7 @@ async function checkAndCloseTabs() {
 // onInstalled: Fired when the extension is first installed, updated to a new version,
 // or Chrome is updated.
 chrome.runtime.onInstalled.addListener(async () => {
-    console.log('Smart Tab Manager: Extension installed or updated.');
+    console.log('Quidle: Extension installed or updated.');
     try {
         // Retrieve current settings to check if they exist.
         const currentSettings = await chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS));
