@@ -89,8 +89,8 @@ async function checkAndCloseTabs() {
         'whitelist',
         'extensionEnabled',
         'actionType',
-        'totalDiscardedCount', // NEW: Retrieve these counts
-        'totalClosedCount'     // NEW: Retrieve these counts
+        'totalDiscardedCount',
+        'totalClosedCount'
     ]);
 
     // Destructure settings, providing default values if not found in storage.
@@ -100,8 +100,8 @@ async function checkAndCloseTabs() {
         whitelist = DEFAULT_SETTINGS.whitelist,
         extensionEnabled = DEFAULT_SETTINGS.extensionEnabled,
         actionType = DEFAULT_SETTINGS.actionType,
-        totalDiscardedCount = DEFAULT_SETTINGS.totalDiscardedCount, // NEW: Default for counter
-        totalClosedCount = DEFAULT_SETTINGS.totalClosedCount       // NEW: Default for counter
+        totalDiscardedCount = DEFAULT_SETTINGS.totalDiscardedCount,
+        totalClosedCount = DEFAULT_SETTINGS.totalClosedCount
     } = settings;
 
     // If the extension is disabled, log a message and exit.
@@ -126,6 +126,10 @@ async function checkAndCloseTabs() {
 
     // Filter tabs that are eligible for closure/suspension.
     const eligibleTabs = allTabs.filter(tab => {
+        // PRIMARY FIX (already present in last code, but crucial): Exclude tabs that are already discarded.
+        if (tab.discarded) {
+            return false;
+        }
         // Exclude active, pinned, or audible tabs.
         if (tab.active || tab.pinned || tab.audible) {
             return false;
@@ -165,62 +169,74 @@ async function checkAndCloseTabs() {
 
     // Sort eligible tabs by their last accessed timestamp to find the oldest one.
     // The tab with the smallest timestamp is the oldest inactive tab.
-    const tabToClose = eligibleTabs.reduce((oldest, current) => {
+    const tabToManage = eligibleTabs.reduce((oldest, current) => {
         const oldestTimestamp = tabTimestamps[oldest.id] || now;
         const currentTimestamp = tabTimestamps[current.id] || now;
         return currentTimestamp < oldestTimestamp ? current : oldest;
     });
 
     // If a tab to close/suspend is identified.
-    if (tabToClose) {
-        console.log(`Quidle: Handling tab: ${tabToClose.title || tabToClose.url} (ID: ${tabToClose.id})`);
-
-        // Prepare data for history.
-        const tabData = {
-            url: tabToClose.url || 'about:blank', // Fallback for undefined URL.
-            title: tabToClose.title || 'Untitled', // Fallback for undefined title.
-            favIconUrl: tabToClose.favIconUrl || '', // Fallback for undefined favicon.
-            closedAt: Date.now() // Timestamp of when the tab was handled.
-        };
+    if (tabToManage) {
+        console.log(`Quidle: Handling tab: ${tabToManage.title || tabToManage.url} (ID: ${tabToManage.id})`);
 
         try {
-            // Retrieve existing closed tabs history.
-            const { closedTabsHistory = [] } = await chrome.storage.local.get('closedTabsHistory');
-            // Add the new tab data to the beginning of the history array.
-            closedTabsHistory.unshift(tabData);
-            // Save the updated history, keeping only the last 10 entries to prevent excessive storage use.
-            await chrome.storage.local.set({ closedTabsHistory: closedTabsHistory.slice(0, 10) });
-            console.log(`Added "${tabData.title}" to closed tabs history.`);
-
             // Perform the chosen action (close or suspend/discard) on the tab.
-            // Using await ensures the history is saved before the tab is removed/discarded.
             if (actionType === 'close') {
-                await chrome.tabs.remove(tabToClose.id);
-                // NEW: Increment totalClosedCount
+                await chrome.tabs.remove(tabToManage.id);
+                // Increment totalClosedCount
                 await chrome.storage.local.set({ totalClosedCount: totalClosedCount + 1 });
-                console.log(`Closed tab: "${tabToClose.title || tabToClose.url}"`);
-            } else { // 'suspend' (discard)
-                await chrome.tabs.discard(tabToClose.id);
-                // NEW: Store the tab ID along with other data for history
-                const suspendedTabData = {
-                    id: tabToClose.id, // CRITICAL ADDITION: Store the tab's ID
-                    url: tabToClose.url || 'about:blank',
-                    title: tabToClose.title || 'Untitled',
-                    favIconUrl: tabToClose.favIconUrl || '',
+                console.log(`Closed tab: "${tabToManage.title || tabToManage.url}"`);
+
+                // Add to history
+                const closedTabData = {
+                    url: tabToManage.url || 'about:blank',
+                    title: tabToManage.title || 'Untitled',
+                    favIconUrl: tabToManage.favIconUrl || '',
                     closedAt: Date.now()
                 };
-                // Retrieve existing history, add the new entry, and save
-                const { closedTabsHistory: currentHistory = [] } = await chrome.storage.local.get('closedTabsHistory');
-                currentHistory.unshift(suspendedTabData);
-                await chrome.storage.local.set({ closedTabsHistory: currentHistory.slice(0, 10) });
+                const { closedTabsHistory = [] } = await chrome.storage.local.get('closedTabsHistory');
 
+                // NEW DEFENSIVE CHECK FOR HISTORY: Prevent duplicate history entries for recently closed tabs
+                const lastEntry = closedTabsHistory.length > 0 ? closedTabsHistory[0] : null;
+                // Check if the last entry is for the same URL and was added very recently (e.g., within 5 seconds)
+                if (lastEntry && lastEntry.url === closedTabData.url && lastEntry.closedAt && (Date.now() - lastEntry.closedAt < 5000)) {
+                    console.warn(`Skipping duplicate history entry for recently closed tab: ${closedTabData.title}`);
+                } else {
+                    closedTabsHistory.unshift(closedTabData);
+                    await chrome.storage.local.set({ closedTabsHistory: closedTabsHistory.slice(0, 10) });
+                    console.log(`Added "${closedTabData.title}" to closed tabs history.`);
+                }
 
-                // NEW: Increment totalDiscardedCount
+            } else { // 'suspend' (discard)
+                await chrome.tabs.discard(tabToManage.id);
+                // Increment totalDiscardedCount
                 await chrome.storage.local.set({ totalDiscardedCount: totalDiscardedCount + 1 });
-                console.log(`Suspended tab: "${tabToClose.title || tabToClose.url}"`);
+                console.log(`Suspended tab: "${tabToManage.title || tabToManage.url}"`);
+
+                // Store the tab ID along with other data for history (for suspended tabs)
+                const suspendedTabData = {
+                    id: tabToManage.id, // CRITICAL ADDITION: Store the tab's ID
+                    url: tabToManage.url || 'about:blank',
+                    title: tabToManage.title || 'Untitled',
+                    favIconUrl: tabToManage.favIconUrl || '',
+                    closedAt: Date.now()
+                };
+                // Retrieve existing history
+                const { closedTabsHistory: currentHistory = [] } = await chrome.storage.local.get('closedTabsHistory');
+
+                // NEW DEFENSIVE CHECK FOR HISTORY: Prevent duplicate history entries for recently suspended tabs
+                const lastEntry = currentHistory.length > 0 ? currentHistory[0] : null;
+                // Check if the last entry is for the same tab ID (more reliable for suspended tabs)
+                if (lastEntry && lastEntry.id === suspendedTabData.id) {
+                    console.warn(`Skipping duplicate history entry for already suspended tab ID: ${suspendedTabData.id}`);
+                } else {
+                    currentHistory.unshift(suspendedTabData);
+                    await chrome.storage.local.set({ closedTabsHistory: currentHistory.slice(0, 10) });
+                    console.log(`Added "${suspendedTabData.title}" to suspended tabs history.`);
+                }
             }
         } catch (error) {
-            console.error(`Error handling tab ${tabToClose.id}:`, error);
+            console.error(`Error handling tab ${tabToManage.id}:`, error);
             if (chrome.runtime.lastError) {
                 console.error("chrome.runtime.lastError:", chrome.runtime.lastError.message);
             }
@@ -310,3 +326,4 @@ chrome.tabs.onRemoved.addListener(tabId => {
     // Remove the tab's timestamp data from storage.
     removeTabData(tabId);
 });
+//312 to 328

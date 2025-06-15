@@ -18,6 +18,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Get reference to the current tab count display element
     const currentTabCountSpan = document.getElementById('currentTabCount');
 
+    // Helper: Show status message
+    function showStatus(msg, isError = false) {
+        saveStatus.textContent = msg;
+        saveStatus.style.color = isError ? 'red' : 'green';
+        setTimeout(() => { saveStatus.textContent = ''; }, 3000);
+    }
+
     // Load saved settings from storage and display them in the popup.
     const loadSettings = async () => {
         try {
@@ -32,14 +39,31 @@ document.addEventListener('DOMContentLoaded', () => {
             if (chrome.runtime.lastError) {
                 console.error("chrome.runtime.lastError:", chrome.runtime.lastError.message);
             }
+            showStatus("Failed to load settings.", true);
         }
     };
 
     // Save the new settings to storage.
     const saveSettings = async () => {
+        // Input validation
         const tabLimit = parseInt(tabLimitInput.value, 10);
         const inactivityTimer = parseInt(inactivityTimerInput.value, 10);
-        const whitelist = whitelistInput.value.split('\n').map(s => s.trim()).filter(Boolean);
+
+        if (isNaN(tabLimit) || tabLimit < 1) {
+            showStatus("Tab limit must be a positive integer.", true);
+            return;
+        }
+        if (isNaN(inactivityTimer) || inactivityTimer < 1) {
+            showStatus("Inactivity timer must be a positive integer.", true);
+            return;
+        }
+
+        // Whitelist: support both comma and newline separation
+        let whitelist = whitelistInput.value
+            .split(/[\n,]+/)
+            .map(s => s.trim())
+            .filter(Boolean);
+
         const extensionEnabled = extensionEnabledCheckbox.checked;
         const actionType = actionTypeInput.value;
 
@@ -51,15 +75,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 extensionEnabled,
                 actionType
             });
-            saveStatus.textContent = 'Settings saved!';
-            setTimeout(() => {
-                saveStatus.textContent = '';
-            }, 3000);
+            showStatus('Settings saved!');
+            loadSettings(); // Reload to sync UI
         } catch (error) {
             console.error("Error saving settings:", error);
             if (chrome.runtime.lastError) {
                 console.error("chrome.runtime.lastError:", chrome.runtime.lastError.message);
             }
+            showStatus("Failed to save settings.", true);
         }
     };
 
@@ -87,10 +110,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const title = tab.title || tab.url || 'Untitled Tab';
                 const url = tab.url || 'about:blank';
-
-                // Pass the original tab ID if it exists and was a suspended tab
-                // This will be used to try and reactivate the original tab
-                const originalTabId = tab.id || null; // Capture the original tab ID
+                const originalTabId = tab.id || '';
 
                 listItem.innerHTML = `
                     <div>
@@ -102,56 +122,49 @@ document.addEventListener('DOMContentLoaded', () => {
                 `;
                 historyList.appendChild(listItem);
             });
-
-            // Attach event listeners for reopen buttons
-            document.querySelectorAll('.reopen-btn').forEach(btn => {
-                btn.addEventListener('click', async () => {
-                    const url = btn.getAttribute('data-url');
-                    const originalTabId = parseInt(btn.getAttribute('data-tab-id'), 10); // Get the original tab ID
-
-                    let tabReopened = false;
-
-                    if (!isNaN(originalTabId)) { // If we have a valid original tab ID
-                        try {
-                            // Try to find the specific tab by its ID
-                            const tabs = await chrome.tabs.query({ id: originalTabId, discarded: true });
-                            if (tabs.length > 0) {
-                                // Found the discarded tab, activate and reload it
-                                await chrome.tabs.update(originalTabId, { active: true });
-                                // Optionally, reload the tab if its content wasn't fully restored
-                                // await chrome.tabs.reload(originalTabId); // Uncomment if just activating isn't enough
-                                console.log(`Reactivated and focused discarded tab ID: ${originalTabId}`);
-                                tabReopened = true;
-                            }
-                        } catch (error) {
-                            console.warn(`Could not find or reactivate tab ID ${originalTabId}. It might have been truly closed or an error occurred:`, error);
-                            // Fall through to creating a new tab if there's an error finding it
-                        }
-                    }
-
-                    if (!tabReopened) {
-                        // If the original discarded tab wasn't found or reactivated,
-                        // try to find any existing tab with the same URL (discarded or not)
-                        const existingTabs = await chrome.tabs.query({ url: url });
-                        if (existingTabs.length > 0) {
-                            // Activate the first found tab with the same URL
-                            await chrome.tabs.update(existingTabs[0].id, { active: true });
-                            console.log(`Activated existing tab with URL: ${url}`);
-                        } else {
-                            // If no existing tab with the URL is found, create a new one
-                            await chrome.tabs.create({ url: url });
-                            console.log(`Created new tab for URL: ${url}`);
-                        }
-                    }
-                });
-            });
         } catch (error) {
             console.error("Error loading closed tabs history:", error);
             if (chrome.runtime.lastError) {
                 console.error("chrome.runtime.lastError:", chrome.runtime.lastError.message);
             }
+            showStatus("Failed to load history.", true);
         }
     };
+
+    // Event delegation for reopen buttons
+    historyList.addEventListener('click', async (event) => {
+        if (event.target.classList.contains('reopen-btn')) {
+            const btn = event.target;
+            const url = btn.getAttribute('data-url');
+            const originalTabId = parseInt(btn.getAttribute('data-tab-id'), 10);
+            let tabReopened = false;
+
+            if (!isNaN(originalTabId)) {
+                try {
+                    const tab = await chrome.tabs.get(originalTabId);
+                    if (tab && tab.discarded) {
+                        await chrome.tabs.update(originalTabId, { active: true });
+                        tabReopened = true;
+                        showStatus("Tab reactivated!");
+                    }
+                } catch (error) {
+                    // Tab not found or not discarded, fall through
+                }
+            }
+
+            if (!tabReopened) {
+                // Try to find any existing tab with the same URL
+                const existingTabs = await chrome.tabs.query({ url: url });
+                if (existingTabs.length > 0) {
+                    await chrome.tabs.update(existingTabs[0].id, { active: true });
+                    showStatus("Existing tab activated!");
+                } else {
+                    await chrome.tabs.create({ url: url });
+                    showStatus("New tab created!");
+                }
+            }
+        }
+    });
 
     // Function to load and display tab management statistics
     const loadStats = async () => {
@@ -164,20 +177,26 @@ document.addEventListener('DOMContentLoaded', () => {
             if (chrome.runtime.lastError) {
                 console.error("chrome.runtime.lastError:", chrome.runtime.lastError.message);
             }
+            showStatus("Failed to load stats.", true);
         }
     };
 
     // Function to clear tab management statistics
     const clearStats = async () => {
+        if (!confirm("Are you sure you want to clear statistics?")) return;
+        clearStatsButton.disabled = true;
         try {
             await chrome.storage.local.set({ totalDiscardedCount: 0, totalClosedCount: 0 });
             loadStats(); // Reload stats to update the display
-            console.log("Tab management statistics cleared.");
+            showStatus("Statistics cleared!");
         } catch (error) {
             console.error("Error clearing statistics:", error);
             if (chrome.runtime.lastError) {
                 console.error("chrome.runtime.lastError:", chrome.runtime.lastError.message);
             }
+            showStatus("Failed to clear stats.", true);
+        } finally {
+            clearStatsButton.disabled = false;
         }
     };
 
@@ -191,29 +210,36 @@ document.addEventListener('DOMContentLoaded', () => {
             if (chrome.runtime.lastError) {
                 console.error("chrome.runtime.lastError:", chrome.runtime.lastError.message);
             }
+            showStatus("Failed to load tab count.", true);
         }
     };
 
     // --- Event Listeners ---
     saveButton.addEventListener('click', saveSettings);
+
     clearHistoryButton.addEventListener('click', async () => {
+        if (!confirm("Are you sure you want to clear tab history?")) return;
+        clearHistoryButton.disabled = true;
         try {
             await chrome.storage.local.remove('closedTabsHistory');
             historyList.innerHTML = '<li style="color: #777;">History cleared.</li>';
-            console.log("Closed tabs history cleared.");
+            showStatus("History cleared!");
         } catch (error) {
             console.error("Error clearing history:", error);
             if (chrome.runtime.lastError) {
                 console.error("chrome.runtime.lastError:", chrome.runtime.lastError.message);
             }
+            showStatus("Failed to clear history.", true);
+        } finally {
+            clearHistoryButton.disabled = false;
         }
     });
-    // Add event listener for the clear stats button
+
     clearStatsButton.addEventListener('click', clearStats);
 
     // --- Initial Load ---
     loadSettings();
     loadClosedTabsHistory();
     loadStats();
-    loadCurrentTabCount(); // Load current tab count on popup open
+    loadCurrentTabCount();
 });
